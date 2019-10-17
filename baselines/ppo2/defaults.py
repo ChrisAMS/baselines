@@ -9,7 +9,8 @@ def mujoco():
         ent_coef=0.0,
         lr=lambda f: 3e-4 * f,
         cliprange=0.2,
-        value_network='copy'
+        value_network='copy',
+        reg_const=0,
     )
 
 def atari():
@@ -19,7 +20,11 @@ def atari():
         ent_coef=.01,
         lr=lambda f : f * 2.5e-4,
         cliprange=0.1,
+        reg_const=0,
     )
+
+def classic_control():
+    return atari()
 
 def retro():
     return atari()

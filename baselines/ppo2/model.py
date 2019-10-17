@@ -25,7 +25,8 @@ class Model(object):
     - Save load the model
     """
     def __init__(self, *, policy, ob_space, ac_space, nbatch_act, nbatch_train,
-                nsteps, ent_coef, vf_coef, max_grad_norm, mpi_rank_weight=1, comm=None, microbatch_size=None):
+                nsteps, ent_coef, vf_coef, max_grad_norm, mpi_rank_weight=1, comm=None, microbatch_size=None,
+                reg_const=0):
         self.sess = sess = get_session()
 
         if MPI is not None and comm is None:
@@ -82,13 +83,31 @@ class Model(object):
 
         pg_losses2 = -ADV * tf.clip_by_value(ratio, 1.0 - CLIPRANGE, 1.0 + CLIPRANGE)
 
+        # Regularization. Add bias?
+
+        def l21_norm(W):
+            # Computes the L21 norm of a symbolic matrix W
+            return tf.reduce_sum(tf.norm(W, axis=1))
+        
+        def group_regularization(v):
+            # Computes a group regularization loss from a list of weight matrices corresponding
+            # to the different layers (see line 93 for its use).
+            const_coeff = lambda W: tf.sqrt(tf.cast(W.get_shape().as_list()[1], tf.float32))
+            return tf.reduce_sum(
+                [tf.multiply(const_coeff(W), l21_norm(W)) for W in v if ('mlp_fc' in W.name and 'w' in W.name)]
+            )
+
+        params = tf.trainable_variables('ppo2_model')
+        with tf.name_scope('group_regularization'):
+            reg_loss = reg_const * group_regularization(params)
+
         # Final PG loss
         pg_loss = tf.reduce_mean(tf.maximum(pg_losses, pg_losses2))
         approxkl = .5 * tf.reduce_mean(tf.square(neglogpac - OLDNEGLOGPAC))
         clipfrac = tf.reduce_mean(tf.to_float(tf.greater(tf.abs(ratio - 1.0), CLIPRANGE)))
 
         # Total loss
-        loss = pg_loss - entropy * ent_coef + vf_loss * vf_coef
+        loss = pg_loss - entropy * ent_coef + vf_loss * vf_coef + reg_loss
 
         # UPDATE THE PARAMETERS USING LOSS
         # 1. Get the model parameters
@@ -112,8 +131,8 @@ class Model(object):
         self.grads = grads
         self.var = var
         self._train_op = self.trainer.apply_gradients(grads_and_var)
-        self.loss_names = ['policy_loss', 'value_loss', 'policy_entropy', 'approxkl', 'clipfrac']
-        self.stats_list = [pg_loss, vf_loss, entropy, approxkl, clipfrac]
+        self.loss_names = ['policy_loss', 'value_loss', 'policy_entropy', 'approxkl', 'clipfrac', 'reg_loss']
+        self.stats_list = [pg_loss, vf_loss, entropy, approxkl, clipfrac, reg_loss]
 
 
         self.train_model = train_model
